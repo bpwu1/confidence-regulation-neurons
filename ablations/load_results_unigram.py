@@ -1,34 +1,19 @@
 # %%
-import os
-os.environ["CUDA_args.device_ORDER"]="PCI_BUS_ID"  
-os.environ["CUDA_VISIBLE_args.deviceS"]="5"
 import sys
 sys.path.append('../')
-from transformer_lens import HookedTransformer
-from sklearn.linear_model import LinearRegression
-import argparse
-import json
-from scipy.stats import ttest_rel, ttest_ind
-from neel.imports import *
-from neel_plotly import * 
-import neel 
 import tqdm
-import math 
-from datasets import Dataset
-import pathlib
-import json
+import random
+import numpy as np
 import pandas as pd
+import torch
 import plotly.express as px
-from utils import *
-import math
 from scipy.stats import spearmanr
 import plotly.graph_objects as go
-from omegaconf import DictConfig, OmegaConf
 from plotly.express.colors import qualitative
+from utils import load_model_from_tl_name, get_pile_unigram_distribution
 # %%
 output_dir = './results'
 model_name = 'gpt2-small'
-model_name = 'pythia-410m'
 dataset = 'stas/c4-en-10k'
 data_range_start = 0
 data_range_end = 1000
