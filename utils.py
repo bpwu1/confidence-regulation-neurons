@@ -1,29 +1,26 @@
 import os
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"  
 os.environ["CUDA_VISIBLE_DEVICES"]="0"
-import sys
-from transformer_lens import HookedTransformer
-from sklearn.linear_model import LinearRegression
-import argparse
-import json
-from scipy.stats import ttest_rel
-from neel.imports import *
-from neel_plotly import * 
-import neel 
+import numpy as np
+import torch
+import einops
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import transformer_lens
+from transformer_lens import HookedTransformer, ActivationCache
+import transformer_lens.utils as utils
+import re
+import pickle
+import datasets
+from datasets import load_dataset
+import neel.utils as nutils
+from typing import List
 import tqdm
 import math 
 from datasets import Dataset
-import pathlib
-import json
 import pandas as pd
 import plotly.express as px
 from functools import partial
-from scipy.stats import kurtosis, moment
 import scipy.stats
-from bs4 import BeautifulSoup
-from scipy.stats import spearmanr
-import rbo
-from scipy.stats import ttest_rel, ttest_ind
 from torch.nn.functional import kl_div
 from collections import Counter
 
@@ -39,7 +36,6 @@ def get_entropy(logits, use_log2=False):
     return 
     entropy (batch seq)
     ''' 
-    d_vocab = logits.shape[-1]
     entropy = logits.softmax(dim=-1) * logits.log_softmax(dim=-1)
 
     if use_log2: 
@@ -210,7 +206,6 @@ def get_entropy_activation_df(neuron_names,
         del logits
         del cache
 
-
     concat_entropy = np.concatenate(entropy, axis = 0)
     concat_top_logit = np.concatenate(top_logit, axis = 0)
     concat_preds = np.concatenate(preds, axis = 0)
@@ -226,10 +221,8 @@ def get_entropy_activation_df(neuron_names,
         if cache_pre_activations: 
             neuron_pre_activations_cache_dict[neuron_name] = np.concatenate(neuron_pre_activations_cache_dict[neuron_name], axis=0)
 
-
         if cache_pre_activations: 
             neuron_pre_activations_cache_dict[neuron_name] = np.concatenate(neuron_pre_activations_cache_dict[neuron_name], axis=0)
-
 
     token_df['token_id'] = concat_token_ids.flatten()
     token_df['entropy'] = concat_entropy.flatten()
@@ -243,7 +236,6 @@ def get_entropy_activation_df(neuron_names,
     #used to compute top1 accuracy
     token_df['pred_in_top1'] = token_df['correct_token_rank'] == 0
     token_df['pred_in_top5'] = token_df['correct_token_rank'] < 5
-
 
     if model2_for_kl is not None:
         concat_model2_kl_div = np.concatenate(model2_kl_div, axis=0)
@@ -272,7 +264,6 @@ def get_entropy_activation_df(neuron_names,
         if cache_resid_norm: 
             for act_name in residuals_dict.keys(): 
                 token_df[f'{residuals_layer}.{act_name}_norm'] = np.linalg.norm(residuals_dict[act_name], axis=-1)
-
 
         return token_df, residuals_dict
     else:
@@ -321,7 +312,6 @@ def filter_entropy_activation_df(entropy_df, model_name=None, tokenizer=None, st
 
     filtered_entropy_df = entropy_df[~combined_mask]
 
-    
     #filtering token positions
     if end_pos < 0: 
         last_seq_pos = entropy_df['pos'].max()
@@ -407,6 +397,7 @@ def adjust_vectors(v, u, target_values):
     adjusted_v = v + delta[:, None] * u  # Adjust v by the deltas along the direction of u
     return adjusted_v
 
+
 #WARNING -> this function doesn't update all columns of entropy df. Some columns in returned new_entropy_df will not reflect the true probs/metrics for the ablated resid stream
 def bos_ablate_attn_heads(attn_head_names,
                       tokenized_data=None,
@@ -416,7 +407,6 @@ def bos_ablate_attn_heads(attn_head_names,
                       k=10,
                       device='mps',
                       cache_pre_activations=True,
-                      compute_ranking_change=False,
                       compute_resid_norm_change=False, # requires entropy_df to have cached pre-ablation norm. currently hard-coded to do "final_layer".resid_post_norm 
                       subtract_b_U=False,
                       seed = 42,
@@ -436,20 +426,12 @@ def bos_ablate_attn_heads(attn_head_names,
     post_ablation_top_ps = []
     kl_before_after = []
     kl_from_bu = []
-    ranking_metrics = {}
-    ranking_metrics['spearman_ranking_corr'] = []
     post_ablation_resid_norm = []
 
     if select == 'all':
         new_entropy_df = entropy_df.copy()
     else:
         new_entropy_df = entropy_df.sample(frac=1, random_state=seed).iloc[:k].copy()
-
-
-    for k in [10, 100, 1000, 60000]:
-        ranking_metrics[f'rbo_{k}'] = []
-        ranking_metrics[f'hamming_distance_{k}'] = []
-        ranking_metrics[f'avg_abs_rank_diff_{k}'] = []
 
     if compute_resid_norm_change: 
         #currently hard-coded to do "final_layer".resid_post_norm 
@@ -538,25 +520,6 @@ def bos_ablate_attn_heads(attn_head_names,
             kl_divergence_before = kl_div(single_token_probs, b_U_probs, reduction='none').sum().item()
             kl_from_bu.append(kl_divergence_after - kl_divergence_before)            
 
-        if compute_ranking_change:
-            logits = logits[0, position, :].cpu()
-            ablated_logits = ablated_logits[0, position, :].cpu()
-            if subtract_b_U:
-                logits = logits - model.b_U.cpu()
-                ablated_logits = ablated_logits - model.b_U.cpu()
-            logits_ranking = logits.argsort(descending=True).numpy()
-            ablated_logits_ranking = ablated_logits.argsort(descending=True).numpy()
-            ranking_metrics['spearman_ranking_corr'].append(spearmanr(ablated_logits, logits)[0])
-
-            for k in [10, 100, 1000, 60000]:
-                rbo_value = rbo.RankingSimilarity(logits_ranking[:k], ablated_logits_ranking[:k]).rbo(p=0.8)
-                ranking_metrics[f'rbo_{k}'].append(rbo_value)
-                hamming_dist = hamming_distance(logits_ranking[:k], ablated_logits_ranking[:k])
-                hamming_dist = hamming_dist / len(logits_ranking[:k])
-                ranking_metrics[f'hamming_distance_{k}'].append(hamming_dist)
-                avg_abs_rank_diff = average_absolute_rank_change(logits_ranking[:k], ablated_logits_ranking[:k])
-                ranking_metrics[f'avg_abs_rank_diff_{k}'].append(avg_abs_rank_diff)
-
         pbar.update(1)
 
 
@@ -591,13 +554,6 @@ def bos_ablate_attn_heads(attn_head_names,
         new_entropy_df[f"post_ablation_{model.cfg.n_layers - 1}.resid_post_norm"] = np.concatenate(post_ablation_resid_norm, axis=0)
         new_entropy_df[f"{model.cfg.n_layers - 1}.resid_post_norm_change"] = new_entropy_df[f"post_ablation_{model.cfg.n_layers - 1}.resid_post_norm"] - new_entropy_df[f"{model.cfg.n_layers - 1}.resid_post_norm"]
 
-
-    if compute_ranking_change:
-        for k in [10, 100, 1000, 60000]:
-            new_entropy_df[f'rbo_{k}'] = np.array(ranking_metrics[f'rbo_{k}'])
-            new_entropy_df[f'hamming_distance_{k}'] = np.array(ranking_metrics[f'hamming_distance_{k}'])
-            new_entropy_df[f'avg_abs_rank_diff_{k}'] = np.array(ranking_metrics[f'avg_abs_rank_diff_{k}'])
-        new_entropy_df['spearman_ranking_corr'] = np.array(ranking_metrics['spearman_ranking_corr'])
     return new_entropy_df
 
 
@@ -609,7 +565,6 @@ def mean_ablate_attn_heads(attn_head_names,
                       k=10,
                       device='mps',
                       cache_pre_activations=True,
-                      compute_ranking_change=False,
                       compute_resid_norm_change=False, # requires entropy_df to have cached pre-ablation norm. currently hard-coded to do "final_layer".resid_post_norm 
                       subtract_b_U=False,
                       seed = 42,
@@ -630,8 +585,6 @@ def mean_ablate_attn_heads(attn_head_names,
     post_ablation_top_ps = []
     kl_before_after = []
     kl_from_bu = []
-    ranking_metrics = {}
-    ranking_metrics['spearman_ranking_corr'] = []
     post_ablation_resid_norm = []
 
     if select == 'all':
@@ -639,11 +592,6 @@ def mean_ablate_attn_heads(attn_head_names,
     else:
         new_entropy_df = entropy_df.sample(frac=1, random_state=seed).iloc[:k].copy()
 
-
-    for k in [10, 100, 1000, 60000]:
-        ranking_metrics[f'rbo_{k}'] = []
-        ranking_metrics[f'hamming_distance_{k}'] = []
-        ranking_metrics[f'avg_abs_rank_diff_{k}'] = []
 
     if compute_resid_norm_change: 
         #currently hard-coded to do "final_layer".resid_post_norm 
@@ -696,7 +644,6 @@ def mean_ablate_attn_heads(attn_head_names,
             if compute_resid_norm_change:             
                 post_ablation_resid_norm.append(ablated_cache[utils.get_act_name("resid_post", model.cfg.n_layers - 1)][:,position].norm(dim=-1).cpu().numpy()) #hard coded for final layer
 
-
         for neuron_name in neuron_names:
             neuron_layer = int(neuron_name.split(".")[0])
             neuron_index = int(neuron_name.split(".")[1])
@@ -705,7 +652,6 @@ def mean_ablate_attn_heads(attn_head_names,
 
             if cache_pre_activations: 
                 post_ablation_neuron_pre_activations_cache_dict[neuron_name].append(ablated_cache[utils.get_act_name("pre", neuron_layer)][..., position, neuron_index].cpu().numpy())
-
 
         ablated_entropy = get_entropy(ablated_logits[:,position,:].unsqueeze(1), use_log2=False).cpu().numpy()
         post_ablation_entropy.append(ablated_entropy)
@@ -732,28 +678,8 @@ def mean_ablate_attn_heads(attn_head_names,
             kl_divergence_after = kl_div(single_token_abl_probs, b_U_probs, reduction='none').sum().item()
             kl_divergence_before = kl_div(single_token_probs, b_U_probs, reduction='none').sum().item()
             kl_from_bu.append(kl_divergence_after - kl_divergence_before)            
-
-        if compute_ranking_change:
-            logits = logits[0, position, :].cpu()
-            ablated_logits = ablated_logits[0, position, :].cpu()
-            if subtract_b_U:
-                logits = logits - model.b_U.cpu()
-                ablated_logits = ablated_logits - model.b_U.cpu()
-            logits_ranking = logits.argsort(descending=True).numpy()
-            ablated_logits_ranking = ablated_logits.argsort(descending=True).numpy()
-            ranking_metrics['spearman_ranking_corr'].append(spearmanr(ablated_logits, logits)[0])
-
-            for k in [10, 100, 1000, 60000]:
-                rbo_value = rbo.RankingSimilarity(logits_ranking[:k], ablated_logits_ranking[:k]).rbo(p=0.8)
-                ranking_metrics[f'rbo_{k}'].append(rbo_value)
-                hamming_dist = hamming_distance(logits_ranking[:k], ablated_logits_ranking[:k])
-                hamming_dist = hamming_dist / len(logits_ranking[:k])
-                ranking_metrics[f'hamming_distance_{k}'].append(hamming_dist)
-                avg_abs_rank_diff = average_absolute_rank_change(logits_ranking[:k], ablated_logits_ranking[:k])
-                ranking_metrics[f'avg_abs_rank_diff_{k}'].append(avg_abs_rank_diff)
         
         pbar.update(1)
-
 
     new_entropy_df['post_ablation_entropy'] = np.concatenate(post_ablation_entropy, axis=0)
     new_entropy_df['entropy_diff'] = new_entropy_df['post_ablation_entropy'] - new_entropy_df['entropy']
@@ -769,11 +695,9 @@ def mean_ablate_attn_heads(attn_head_names,
         new_entropy_df['kl_before_after'] = np.array(kl_before_after)
         new_entropy_df['kl_from_bu'] = np.array(kl_from_bu)
         new_entropy_df['absolute_kl_from_bu'] = np.abs(new_entropy_df['kl_from_bu'])
-        
 
     new_entropy_df['post_ablation_ln_final_scale'] = np.concatenate(post_ablation_ln_final_scale).flatten()
     new_entropy_df['ln_final_scale_diff'] = new_entropy_df['post_ablation_ln_final_scale'] - new_entropy_df['ln_final_scale']
-
 
     for neuron_name in post_ablation_neuron_activations_cache_dict.keys(): 
         new_entropy_df[f'{neuron_name}_activation_post_abl'] = np.concatenate(post_ablation_neuron_activations_cache_dict[neuron_name], axis=0).flatten()
@@ -786,13 +710,6 @@ def mean_ablate_attn_heads(attn_head_names,
         new_entropy_df[f"post_ablation_{model.cfg.n_layers - 1}.resid_post_norm"] = np.concatenate(post_ablation_resid_norm, axis=0)
         new_entropy_df[f"{model.cfg.n_layers - 1}.resid_post_norm_change"] = new_entropy_df[f"post_ablation_{model.cfg.n_layers - 1}.resid_post_norm"] - new_entropy_df[f"{model.cfg.n_layers - 1}.resid_post_norm"]
 
-
-    if compute_ranking_change:
-        for k in [10, 100, 1000, 60000]:
-            new_entropy_df[f'rbo_{k}'] = np.array(ranking_metrics[f'rbo_{k}'])
-            new_entropy_df[f'hamming_distance_{k}'] = np.array(ranking_metrics[f'hamming_distance_{k}'])
-            new_entropy_df[f'avg_abs_rank_diff_{k}'] = np.array(ranking_metrics[f'avg_abs_rank_diff_{k}'])
-        new_entropy_df['spearman_ranking_corr'] = np.array(ranking_metrics['spearman_ranking_corr'])
     return new_entropy_df
 
 
@@ -869,7 +786,6 @@ def generate_induction_examples(model, tokenizer, seq_length=100, num_examples=5
     return tokens
 
 
-
 def get_induction_data_and_token_df(model, tokenizer, seq_length, num_examples, seed=42, device='cuda', use_natural_text=False, use_separator=None, num_repetitions=1): 
     artificial_data = Dataset.from_dict({'tokens': generate_induction_examples(model, tokenizer, seq_length=seq_length, num_examples=num_examples, seed=seed, device=device, use_natural_text=use_natural_text, use_separator=use_separator, num_repetitions=num_repetitions)})
     artificial_data.set_format(type="torch", columns=["tokens"])
@@ -882,8 +798,6 @@ def get_induction_data_and_token_df(model, tokenizer, seq_length, num_examples, 
 # ====== 
 # unigram stuff 
 # ====== 
-
-
 
 # get pile unigram count - specifically for Pythia
 def get_pile_unigram_distribution(file_path="datasets/pythia-unigrams.npy", pad_to_match_W_U=True, device="cuda", model_name="pythia-410m"): 
@@ -1043,6 +957,7 @@ def add_induction_info(example, n=4, banned_tokens=set()):
 
         return example
 
+
 # used to record position of ngrams in a sequence
 def get_n_grams_with_pos_dict(tensor, n=2): 
     '''
@@ -1057,8 +972,6 @@ def get_n_grams_with_pos_dict(tensor, n=2):
     return n_grams_with_pos
 
 
-
-
 def get_banned_tokens_for_induction(model, tokenizer): 
     unknown_token_list = [i for i in range(model.cfg.d_vocab) if '�' in model.to_single_str_token(i)] # this covers cases like 447 and 227 which are jointly tokenised as an apostrophe in gpt2-small
     bos_token_list = [tokenizer.bos_token_id] # this may cause issues for models without bos token
@@ -1070,6 +983,7 @@ def get_banned_tokens_for_induction(model, tokenizer):
         other_tokens = [model.to_single_token('\n')]
     banned_tokens = set(unknown_token_list + bos_token_list + other_tokens)
     return banned_tokens
+
 
 def get_natural_induction_data(tokenized_data, tokenizer, induction_prefix_length=4, max_induction_ngram_count=2, min_distance_between_induction_ngrams=1, banned_tokens=set()):
     # takes in a hf dataset with column 'tokens' of format torch. 
@@ -1099,7 +1013,6 @@ def get_natural_induction_data(tokenized_data, tokenizer, induction_prefix_lengt
 
 
     return filtered_data
-
 
 
 def get_potential_entropy_neurons_udark(model, select_mode="top_n", percentage_threshold=0.01, select_top_n=10, udark_start=-40, udark_end=0, plot_graph=False): 
@@ -1134,6 +1047,7 @@ def get_potential_entropy_neurons_udark(model, select_mode="top_n", percentage_t
         fig.show()
     return top_percent_neuron_names
 
+
 def plot_neuron_ablation_results(df, neuron_selection, ablation_type, filter_mode=None, induction_prefix_length=None, neuron_mean_activation=None, 
 preserve_activations_above_or_below_mean=None, memorization_prefix_length=None, skip_kl_from_xl=False):
     '''
@@ -1159,16 +1073,13 @@ preserve_activations_above_or_below_mean=None, memorization_prefix_length=None, 
         else:
             print("Invalid preserve_activations_above_or_below_mean argument. Must be 'above' or 'below'")
 
-
     # loss vs entropy 
     fig = px.scatter(neuron_df, x="loss", y="entropy", color="1/rank_of_correct_token", hover_data=["context"])
     fig.show()
 
-
     # activation v delta loss
     fig = px.scatter(neuron_df, x=f"{neuron_selection}_activation", y="delta_loss_post_ablation", title=f"Change in loss when ablating {neuron_selection}. <br> Ablation type: {ablation_type}", marginal_y="histogram", hover_data=["context", "unique_token"], color="1/rank_of_correct_token")
     fig.show()
-
 
     # activation v delta entropy
     fig = px.scatter(neuron_df, x=f"{neuron_selection}_activation", y="delta_entropy", title=f"Change in entropy when ablating {neuron_selection}. <br> Ablation type: {ablation_type}", marginal_y="histogram", hover_data=["context", "unique_token"], color="1/rank_of_correct_token")
@@ -1221,6 +1132,7 @@ def induction_attn_detector(cache: ActivationCache, threshold=0.7, model=None) -
     induction_df['is_induction'] = induction_df['induction_scores'] > threshold
 
     return induction_df
+
 
 def generate_induction_df(model, tokens, batch_size=1, num_batches=1, threshold=0):
     '''

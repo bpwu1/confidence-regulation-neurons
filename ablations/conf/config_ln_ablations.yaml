@@ -1,4 +1,3 @@
-wandb_mode: disabled
 device: cuda
 dry_run: false
 seed: 42

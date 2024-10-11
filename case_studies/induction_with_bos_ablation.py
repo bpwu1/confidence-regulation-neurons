@@ -260,7 +260,6 @@ def bos_ablate_components(
     k=50,
     device=device,
     cache_pre_activations=False,
-    compute_ranking_change=False,
     compute_resid_norm_change=False, # requires entropy_df to have cached pre-ablation norm. currently hard-coded to do "final_layer".resid_post_norm 
     subtract_b_U=False,
     seed = 42,
@@ -279,7 +278,6 @@ def bos_ablate_components(
             k=k,
             device=device,
             cache_pre_activations=cache_pre_activations,
-            compute_ranking_change=compute_ranking_change,
             compute_resid_norm_change=compute_resid_norm_change,
             subtract_b_U=subtract_b_U,
             seed=seed,
@@ -322,7 +320,6 @@ bos_ablation_df = bos_ablate_components(
     k=k,
     device=device,
     cache_pre_activations=False,
-    compute_ranking_change=False,
     compute_resid_norm_change=False, # requires entropy_df to have cached pre-ablation norm. currently hard-coded to do "final_layer".resid_post_norm 
     subtract_b_U=False,
     seed = SEED,
