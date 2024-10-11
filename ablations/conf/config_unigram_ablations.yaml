@@ -10,10 +10,8 @@ data_range_start: 0
 data_range_end: 1000
 batch_size: 1
 k: 10
-chunk_size: 20
 neuron_range: null
 hf_token_path: ./hf_token.txt
-get_rank_of_correct_token: false
 
 output_dir: results
 transformers_cache_dir: null

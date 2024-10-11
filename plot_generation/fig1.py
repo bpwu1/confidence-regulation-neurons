@@ -1,33 +1,14 @@
 # %% 
 import os
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"  
-os.environ["CUDA_VISIBLE_DEVICES"]="0"
 import sys
 sys.path.append('../')
-from transformer_lens import HookedTransformer
-from scipy.stats import ttest_rel, ttest_ind
-from neel.imports import *
 from neel_plotly import *
 import neel 
-import tqdm
-import math 
-from datasets import Dataset
-import json
 import pandas as pd
 import plotly.express as px
 from utils import *
-import math
-from scipy.stats import spearmanr
 import plotly.graph_objects as go
-from scipy.special import kl_div
-from plotly.express.colors import qualitative
 # %%
-SEED = 42
-
-torch.manual_seed(SEED)
-np.random.seed(SEED)
-random.seed(SEED)
-torch.set_grad_enabled(False)
 
 transformers_cache_dir = None
 #check if cuda is available
@@ -41,18 +22,10 @@ os.chdir('../')
 
 # %%
 model_name = "gpt2-small"
-#model_name = "google/gemma-2b"
-#model_name = 'pythia-410m'
-#model_name = 'phi-2'
-#model_name = 'Llama-2-7B'
 
 lowest_composing_neurons_dict = {
     'stanford-gpt2-small-a': ['11.3030', '11.2859', '11.995', '11.2546', '11.823', '11.2748'],
     'gpt2-small': ['11.584', '11.2378', '11.2870', '11.2123', '11.1611', '11.2910'],
-    'pythia-410m':  [],
-    'pythia-1.4b':  ['23.5104', '23.435', '23.6368', '23.7756', '23.3636'],
-    'pythia-2.8b':  ['31.8255', '31.6326', '31.6955', '31.5251', '31.1676'],
-    'pythia-6.9b':  [],
 }
 
 print_summary_info = False
@@ -83,13 +56,11 @@ df = pd.DataFrame({'norm': norm.cpu(),'cos_var': cos_var.cpu(), 'is_entropy': is
 
 # Add a new column 'neuron_index' to the DataFrame
 df['neuron_index'] = df.index
-
 df['is_entropy'] = df['is_entropy'].map({True: 'Entropy', False: 'Normal'})
 
 # Create a new column 'label' that contains the neuron index for entropy neurons and is empty for other neurons
 df['label'] = df.apply(lambda row: str(row['neuron_index']) if row['is_entropy'] == 'Entropy' else '', axis=1)
 
-#ylabel = r'$(\mathrm{Var}(W_{O}W_{U})$'}'
 ylabel = 'LogitVar(w<sub>out</sub>)'
 xlabel = '||w<sub>out</sub>||'
 fig = px.scatter(df, x='norm', y='cos_var', title='(a) Norm vs. LogitVar', color_discrete_sequence=['#636EFA', '#EF553B'], labels={'norm':xlabel, 'cos_var': ylabel, 'is_entropy': 'Neuron'}, log_y=True, marginal_x='histogram', marginal_y='box', color='is_entropy')
@@ -106,8 +77,6 @@ for neuron_index in entropy_neuron_indices:
     else:
         fig.add_trace(go.Scatter(x=entropy_df['norm'], y=entropy_df['cos_var']*0.77, mode='text', text=entropy_df['label'], textposition='bottom center', showlegend=False, textfont=dict(color='#EF553B')))
 
-# remove the legend
-#fig.update_layout(showlegend=False)
 # remove padding
 fig.update_layout(margin=dict(l=0, r=3, t=30, b=0))
 
@@ -127,5 +96,4 @@ fig.update_layout(legend=dict(
     ),)
 
 fig.show()
-# store the plot as pdf
-#fig.write_image('./img/norm_vs_var.pdf')
+# %%

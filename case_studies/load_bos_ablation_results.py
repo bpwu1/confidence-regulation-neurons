@@ -73,12 +73,7 @@ model = model.to(device)
 data = load_dataset("stas/c4-en-10k", split='train')
 first_1k = data.select([i for i in range(0, 1000)])
 
-if 'qwen' in model_name.lower(): 
-    tokenized_data = qwen_tokenize_and_concatenate(first_1k, tokenizer, max_length=256, column_name='text', add_bos_token=False)
-    #seems to work, but need to check that there aren't weird bugs
-    # repo suggests that we don't begin with a bos token: https://github.com/QwenLM/Qwen - 'Running Qwen'
-else: 
-    tokenized_data = utils.tokenize_and_concatenate(first_1k, tokenizer, max_length=256, column_name='text')
+tokenized_data = utils.tokenize_and_concatenate(first_1k, tokenizer, max_length=256, column_name='text')
 
 tokenized_data = tokenized_data.shuffle(SEED)
 token_df = nutils.make_token_df(tokenized_data['tokens'])

@@ -324,14 +324,12 @@ def run_and_store_ablation_results(args: DictConfig):
     # Ablate the dimensions
     # =============================================================================
     model.set_use_attn_result(False)
-    ablation_type = 'direct'
     results = mean_ablate_components(components_to_ablate=all_neurons,
                                     tokenized_data=tokenized_data,
                                     entropy_df=entropy_df,
                                     model=model,
                                     k=args.k,
                                     device=args.device,
-                                    type=ablation_type,
                                     get_rank_of_correct_token=args.get_rank_of_correct_token)
     
     # concatenate the results

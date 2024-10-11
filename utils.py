@@ -280,25 +280,18 @@ def filter_entropy_activation_df(entropy_df, model_name=None, tokenizer=None, st
     #filtering token_ids
     newline_token_id = None
 
-    if 'qwen' in model_name.lower():
-        #qwen has no bos token 
-        bos_token_id = tokenizer.eos_token_id
-        eos_token_id = bos_token_id
-        assert(bos_token_id==151643)
-        #"\n\n" has its own separate token in qwen's vocab
 
-    else: 
-        bos_token_id = tokenizer.bos_token_id
-        eos_token_id = tokenizer.eos_token_id
+    bos_token_id = tokenizer.bos_token_id
+    eos_token_id = tokenizer.eos_token_id
 
-        if 'pythia' in model_name.lower(): 
-            assert(bos_token_id==0 and eos_token_id==0)
+    if 'pythia' in model_name.lower(): 
+        assert(bos_token_id==0 and eos_token_id==0)
 
-        if 'stanford' in model_name.lower(): 
-            newline_token_id = tokenizer.encode("\n")[0]
-            assert(bos_token_id==50256 and eos_token_id==50256)
-        elif 'gpt' in model_name.lower(): 
-            newline_token_id = tokenizer.encode("\n")[0]
+    if 'stanford' in model_name.lower(): 
+        newline_token_id = tokenizer.encode("\n")[0]
+        assert(bos_token_id==50256 and eos_token_id==50256)
+    elif 'gpt' in model_name.lower(): 
+        newline_token_id = tokenizer.encode("\n")[0]
 
     bos_mask = entropy_df['token_id'] == bos_token_id
     eos_mask = entropy_df['token_id'] == eos_token_id
