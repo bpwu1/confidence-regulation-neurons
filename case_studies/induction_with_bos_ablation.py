@@ -1,36 +1,21 @@
 # %% 
 import os
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"  
-os.environ["CUDA_VISIBLE_DEVICES"]="3"
 import sys
 sys.path.append('../')
-from transformer_lens import HookedTransformer
-from sklearn.linear_model import LinearRegression
-import argparse
-import json
-from scipy.stats import ttest_rel, ttest_ind
-from neel.imports import *
-from neel_plotly import * 
-import neel 
-import tqdm
-import math 
-from datasets import Dataset
-import pathlib
-import json
+
+import random 
 import pandas as pd
+from datasets import load_dataset
+from utils import load_model_from_tl_name, get_potential_entropy_neurons_udark, get_entropy_activation_df, generate_induction_examples, generate_induction_df, get_induction_data_and_token_df, bos_ablate_attn_heads
 import plotly.express as px
-from functools import partial
-from utils import *
-import math
-from scipy.stats import spearmanr
-import rbo
 import plotly.graph_objects as go
-import plotly
-from plotly.express.colors import qualitative
+import torch
+import numpy as np
+import transformer_lens.utils as tl_utils
+import neel.utils as nutils
 
 # %%
 SEED = 42
-
 torch.manual_seed(SEED)
 np.random.seed(SEED)
 random.seed(SEED)
@@ -40,34 +25,20 @@ transformers_cache_dir = None
 #check if cuda is available
 if torch.cuda.is_available():
     device = 'cuda'
-    
 else:
     device = 'mps'
 
 
 # %%
 model_name = "gpt2-small"
-
-
-print_summary_info = False
-use_log2_entropy = False 
-
-entropy_type = 'base e'
-if use_log2_entropy:
-    entropy_type = 'base 2'
-
-# %%
 model, tokenizer = load_model_from_tl_name(model_name, device, transformers_cache_dir)
 model = model.to(device)
 
 # %%
-#data = load_dataset("stas/openwebtext-10k", split='train')
 data = load_dataset("stas/c4-en-10k", split='train')
 first_1k = data.select([i for i in range(0, 1000)])
 
-
-tokenized_data = utils.tokenize_and_concatenate(first_1k, tokenizer, max_length=256, column_name='text')
-
+tokenized_data = tl_utils.tokenize_and_concatenate(first_1k, tokenizer, max_length=256, column_name='text')
 tokenized_data = tokenized_data.shuffle(SEED)
 token_df = nutils.make_token_df(tokenized_data['tokens'])
 
@@ -78,7 +49,6 @@ elif model_name == "gpt2-small":
     udark_start = -12
 
 entropy_neurons = get_potential_entropy_neurons_udark(model, select_mode="top_n", select_top_n=10,udark_start=udark_start, udark_end=0, plot_graph=True)
-
 
 possible_random_neuron_indices = list(range(0, model.cfg.d_mlp))
 for neuron_name in entropy_neurons:
@@ -123,7 +93,6 @@ fig.show()
 # =============================================================================
 # Induction
 # =============================================================================
-
 
 # smaller dataset for speed
 smaller_seq_len = 50
@@ -269,6 +238,7 @@ def bos_ablate_components(
     final_df = None 
 
     for components_to_ablate in list_of_components_to_ablate: 
+        print(f"ablate {components_to_ablate}")
         ablation_df = bos_ablate_attn_heads(
             attn_head_names=components_to_ablate,
             tokenized_data=tokenized_data,
@@ -299,17 +269,22 @@ def bos_ablate_components(
     
 
 # %%
-k = 50
-select_type= "all"
+k = 1000
+#whether to ablate k rows of induction_df, or all rows
+select_type= "all" 
+# select_type = 'fraction'
+
 list_of_components_to_ablate = [induction_heads[:1], induction_heads[:2], induction_heads[:3]] 
 list_of_components_to_ablate += [induction_heads[1:2], induction_heads[2:3]]
 
+# gpt2-small heads
 single_head_baselines =  ["L6H1", "L5H7", "L5H6", "L5H8", "L6H10", "L6H3"] 
 multi_head_baselines = ["L5H7-L5H6", "L6H1-L5H7", "L5H8-L6H3", "L5H7-L5H6-L5H8", "L6H1-L5H6-L6H10", "L5H7-L6H10-L6H3"]
 
-list_of_components_to_ablate +  single_head_baselines #baselines 
+list_of_components_to_ablate +=  single_head_baselines #baselines 
 list_of_components_to_ablate += multi_head_baselines #baselines
 
+list_of_components_to_ablate = [induction_heads[:1]] + [induction_heads[1:2], induction_heads[2:3]]
 
 bos_ablation_df = bos_ablate_components(
     list_of_components_to_ablate=list_of_components_to_ablate,
@@ -320,7 +295,7 @@ bos_ablation_df = bos_ablate_components(
     k=k,
     device=device,
     cache_pre_activations=False,
-    compute_resid_norm_change=False, # requires entropy_df to have cached pre-ablation norm. currently hard-coded to do "final_layer".resid_post_norm 
+    compute_resid_norm_change=False, 
     subtract_b_U=False,
     seed = SEED,
     compute_kl = False,
@@ -330,3 +305,4 @@ bos_ablation_df = bos_ablate_components(
 # %%
 tmp_df = bos_ablation_df.reset_index()
 tmp_df.to_feather(f"../large_scale_exp/results/gpt2-small/{model_name}_bos_ablation_df_seq{smaller_seq_len}_k{smaller_num_examples}.feather")
+# %%

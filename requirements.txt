@@ -12,6 +12,7 @@ jaxtyping==0.2.19
 kaleido==0.2.1
 matplotlib==3.7.4
 numpy==1.24.4
+nbformat
 omegaconf==2.3.0
 pandas==2.0.3
 plotly==5.18.0

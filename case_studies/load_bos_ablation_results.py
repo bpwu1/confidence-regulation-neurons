@@ -1,32 +1,22 @@
+# script for plotting the results of the BOS ablation experiments for gpt2-small
+
 # %% 
 import os
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"  
 os.environ["CUDA_VISIBLE_DEVICES"]="0"
 import sys
 sys.path.append('../')
-from transformer_lens import HookedTransformer
-from sklearn.linear_model import LinearRegression
-import argparse
-import json
-from scipy.stats import ttest_rel, ttest_ind
-from neel.imports import *
-from neel_plotly import * 
-import neel 
-import tqdm
-import math 
-from datasets import Dataset
-import pathlib
-import json
+
+import random 
 import pandas as pd
+from datasets import load_dataset
+from utils import load_model_from_tl_name, get_potential_entropy_neurons_udark,generate_induction_examples, generate_induction_df, get_induction_data_and_token_df
 import plotly.express as px
-from functools import partial
-from utils import *
-import math
-from scipy.stats import spearmanr
-import rbo
 import plotly.graph_objects as go
-import plotly
-from plotly.express.colors import qualitative
+import torch
+import numpy as np
+import transformer_lens.utils as tl_utils
+import neel.utils as nutils
 from ast import literal_eval
 
 # %%
@@ -38,38 +28,23 @@ random.seed(SEED)
 torch.set_grad_enabled(False)
 
 transformers_cache_dir = None
+#check if cuda is available
+if torch.cuda.is_available():
+    device = 'cuda'
+else:
+    device = 'mps'
 
 # %%
 model_name = "gpt2-small"
-
 lowest_composing_neurons_dict = {
-    'stanford-gpt2-small-a': ['11.3030', '11.2859', '11.2546',  '11.2748', '11.823', '11.995'],
     'gpt2-small': ['11.584', '11.2378', '11.2870', '11.2123', '11.1611', '11.2910'],
-    # 'pythia-410m':  ['23.417', '23.1666', '23.3412'] + ["23.1892"],
-    #"pythia-410m": ['23.417', '23.1666', '23.3412'] + ['23.1332', '23.324', '23.2481', '23.506', '23.746'] + ["23.1892"],
-    "pythia-410m": ['23.87', '23.417', '23.730', '23.2017', '23.2952','23.3412'], # these are unigram neurons
-    'pythia-1.4b':  ['23.5104', '23.435', '23.6368', '23.7756', '23.3636'],
-    'pythia-2.8b':  ['31.8255', '31.6326', '31.6955', '31.5251', '31.1676'],
-    'pythia-6.9b':  [],
-    'pythia-1b':  ['15.6480', '15.6413'],
-    'opt-125m': ['11.2288'],
-    'phi-1': ['23.3573', '23.6994', '23.4677', '23.5426', '23.6917'],
-    'phi-2' : ['31.7335', '31.1121'],
 }
-
-print_summary_info = False
-use_log2_entropy = False 
-
-entropy_type = 'base e'
-if use_log2_entropy:
-    entropy_type = 'base 2'
 
 # %%
 model, tokenizer = load_model_from_tl_name(model_name, device, transformers_cache_dir)
 model = model.to(device)
 
 # %%
-#data = load_dataset("stas/openwebtext-10k", split='train')
 data = load_dataset("stas/c4-en-10k", split='train')
 first_1k = data.select([i for i in range(0, 1000)])
 
@@ -168,28 +143,28 @@ def load_and_combine_ablation_dfs(folder_path, string_match):
     return combined_df
 
 # %%
-# plotting begins here 
+# plotting for gpt2-small begins here 
 ablation_type = "BOS Ablation" # "Mean Ablation" or "BOS Ablation"
 
 os.chdir("../")
 
 if ablation_type == "Mean Ablation":
     bos_ablation_df = load_and_combine_ablation_dfs(f"./large_scale_exp/results/{model_name}", "mean_attn_ablation_df_seq50_k100")
-             
-    ablation_file_name = "mean_attn" #for generating save name 
+    ablation_file_name = "mean_attn" #for generating save name
     plot_seq_len = 50
     plot_k = 16
 
 elif ablation_type == "BOS Ablation":
     bos_ablation_df = load_and_combine_ablation_dfs(f"./large_scale_exp/results/{model_name}", "bos_ablation_df_seq50_k100")
-    ablation_file_name = "bos_ablation" #for generating save name 
+    ablation_file_name = "bos_ablation" #for generating save name
     plot_seq_len = 50
     plot_k = 100
 
 
 # %%
 component_selection = "custom" #all or custom
-induction_heads_type = "random" #random or natural #score used to determine order of induction heads. i.e. random means caculated from random repeated tokens, natural means caculated from (synthetic) natural text
+induction_heads_type = "random" #random or natural 
+#score used to determine order of induction heads. i.e. random means caculated from random repeated tokens, natural means caculated from (synthetic) natural text
 baseline_type = "all" # or all
 number_of_induction_heads = 3
 
@@ -225,7 +200,7 @@ agg_activations = agg_activations[agg_activations.component_name.isin(components
 def get_color_for_val(val, vmin, vmax, pl_colors):
     
     if pl_colors[0][:3] != 'rgb':
-        raise ValueError('This function works only with Plotly  rgb-colorscales')
+        raise ValueError('This function works only with Plotly rgb-colorscales')
     if vmin >= vmax:
         raise ValueError('vmin should be < vmax')
     
@@ -259,8 +234,6 @@ max_color_subtraction = -0.2
 
 # for joint heads
 joint_head_manual_color_adjust_val = 0.5
-
-
 
 neurons_to_plot = ['11.2378', '11.2870', '11.2123', '11.1611', '11.2910', "11.584"]
 # neurons_to_plot = ['11.2378']

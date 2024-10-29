@@ -10,7 +10,6 @@ To install the required packages, run:
 
     pip install -r requirements.txt
     pip install git+https://github.com/neelnanda-io/neelutils.git
-    pip install git+https://github.com/neelnanda-io/neel-plotly.git
 
 For accessing gated repositories (e.g., LLaMA), add your HuggingFace token to `./ablations/hf_token.txt`.
 

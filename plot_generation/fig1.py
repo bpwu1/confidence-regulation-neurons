@@ -2,8 +2,6 @@
 import os
 import sys
 sys.path.append('../')
-from neel_plotly import *
-import neel 
 import pandas as pd
 import plotly.express as px
 from utils import *
@@ -27,13 +25,6 @@ lowest_composing_neurons_dict = {
     'stanford-gpt2-small-a': ['11.3030', '11.2859', '11.995', '11.2546', '11.823', '11.2748'],
     'gpt2-small': ['11.584', '11.2378', '11.2870', '11.2123', '11.1611', '11.2910'],
 }
-
-print_summary_info = False
-use_log2_entropy = False 
-
-entropy_type = 'base e'
-if use_log2_entropy:
-    entropy_type = 'base 2'
 
 # %%
 model, tokenizer = load_model_from_tl_name(model_name, device, transformers_cache_dir, hf_token=None)

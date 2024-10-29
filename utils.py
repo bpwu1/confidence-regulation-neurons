@@ -7,7 +7,7 @@ import einops
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import transformer_lens
 from transformer_lens import HookedTransformer, ActivationCache
-import transformer_lens.utils as utils
+import transformer_lens.utils as tl_utils
 import re
 import pickle
 import datasets
@@ -15,7 +15,7 @@ from datasets import load_dataset
 import neel.utils as nutils
 from typing import List
 import tqdm
-import math 
+import math
 from datasets import Dataset
 import pandas as pd
 import plotly.express as px
@@ -158,10 +158,10 @@ def get_entropy_activation_df(neuron_names,
         for neuron_name in neuron_names:
             neuron_layer, neuron_index = neuron_str_to_neuron(neuron_name)
             
-            neuron_activations_cache_dict[neuron_name].append(cache[utils.get_act_name("post", neuron_layer)][..., neuron_index].cpu().numpy())
+            neuron_activations_cache_dict[neuron_name].append(cache[tl_utils.get_act_name("post", neuron_layer)][..., neuron_index].cpu().numpy())
 
             if cache_pre_activations: 
-                neuron_pre_activations_cache_dict[neuron_name].append(cache[utils.get_act_name("pre", neuron_layer)][..., neuron_index].cpu().numpy())
+                neuron_pre_activations_cache_dict[neuron_name].append(cache[tl_utils.get_act_name("pre", neuron_layer)][..., neuron_index].cpu().numpy())
 
         entropy.append(get_entropy(logits, use_log2=False).cpu().numpy())
 
@@ -181,7 +181,7 @@ def get_entropy_activation_df(neuron_names,
 
                 elif "." not in act_name:
                     #assumes dict key is something like 'resid_post"
-                    activation = cache[utils.get_act_name(act_name, residuals_layer)]
+                    activation = cache[tl_utils.get_act_name(act_name, residuals_layer)]
 
                 else:
                     # assumes that the dict key is the raw string of form e.g. 'blocks.7.hook_attn_out'
@@ -200,7 +200,7 @@ def get_entropy_activation_df(neuron_names,
             layer_idx, head_idx = map(int, match.groups())
             if attn_head not in attention_to_bos_dict:
                 attention_to_bos_dict[attn_head] = []
-            attention_to_bos_dict[attn_head].append(cache[utils.get_act_name("pattern", layer_idx)][:,head_idx,:,0].cpu().numpy())
+            attention_to_bos_dict[attn_head].append(cache[tl_utils.get_act_name("pattern", layer_idx)][:,head_idx,:,0].cpu().numpy())
 
 
         del logits
@@ -464,7 +464,7 @@ def bos_ablate_attn_heads(attn_head_names,
             match = re.search(pattern, attn_head)
             layer_idx, head_idx = map(int, match.groups())
 
-            hooks.append((utils.get_act_name("pattern", layer_idx), partial(ablation_hook, position=position, head=head_idx)))
+            hooks.append((tl_utils.get_act_name("pattern", layer_idx), partial(ablation_hook, position=position, head=head_idx)))
 
         model.reset_hooks()
         with model.hooks(fwd_hooks=hooks):
@@ -474,17 +474,17 @@ def bos_ablate_attn_heads(attn_head_names,
             if compute_resid_norm_change: 
                 #TODO: probably best way to calculate resid norm is to add a hook. for now, we recompute from the cache
             
-                post_ablation_resid_norm.append(ablated_cache[utils.get_act_name("resid_post", model.cfg.n_layers - 1)][:,position].norm(dim=-1).cpu().numpy()) #hard coded for final layer
+                post_ablation_resid_norm.append(ablated_cache[tl_utils.get_act_name("resid_post", model.cfg.n_layers - 1)][:,position].norm(dim=-1).cpu().numpy()) #hard coded for final layer
 
 
         for neuron_name in neuron_names:
             neuron_layer = int(neuron_name.split(".")[0])
             neuron_index = int(neuron_name.split(".")[1])
 
-            post_ablation_neuron_activations_cache_dict[neuron_name].append(ablated_cache[utils.get_act_name("post", neuron_layer)][..., position, neuron_index].cpu().numpy())
+            post_ablation_neuron_activations_cache_dict[neuron_name].append(ablated_cache[tl_utils.get_act_name("post", neuron_layer)][..., position, neuron_index].cpu().numpy())
 
             if cache_pre_activations: 
-                post_ablation_neuron_pre_activations_cache_dict[neuron_name].append(ablated_cache[utils.get_act_name("pre", neuron_layer)][..., position, neuron_index].cpu().numpy())
+                post_ablation_neuron_pre_activations_cache_dict[neuron_name].append(ablated_cache[tl_utils.get_act_name("pre", neuron_layer)][..., position, neuron_index].cpu().numpy())
 
 
         ablated_entropy = get_entropy(ablated_logits[:,position,:].unsqueeze(1), use_log2=False).cpu().numpy()
@@ -618,7 +618,7 @@ def mean_ablate_attn_heads(attn_head_names,
         inp = tokenized_data['tokens'][r.batch][:].to(device)
         
         #logits, cache = model.run_with_cache(inp)
-        #test_act = cache[utils.get_act_name("post", neuron_layer)][0, -1, neuron_index].cpu().numpy()
+        #test_act = cache[tl_utils.get_act_name("post", neuron_layer)][0, -1, neuron_index].cpu().numpy()
         position = r.pos
 
         hooks = []
@@ -635,16 +635,16 @@ def mean_ablate_attn_heads(attn_head_names,
             post_ablation_ln_final_scale.append(ablated_cache["ln_final.hook_scale"][0,position,:].cpu().numpy())
 
             if compute_resid_norm_change:             
-                post_ablation_resid_norm.append(ablated_cache[utils.get_act_name("resid_post", model.cfg.n_layers - 1)][:,position].norm(dim=-1).cpu().numpy()) #hard coded for final layer
+                post_ablation_resid_norm.append(ablated_cache[tl_utils.get_act_name("resid_post", model.cfg.n_layers - 1)][:,position].norm(dim=-1).cpu().numpy()) #hard coded for final layer
 
         for neuron_name in neuron_names:
             neuron_layer = int(neuron_name.split(".")[0])
             neuron_index = int(neuron_name.split(".")[1])
 
-            post_ablation_neuron_activations_cache_dict[neuron_name].append(ablated_cache[utils.get_act_name("post", neuron_layer)][..., position, neuron_index].cpu().numpy())
+            post_ablation_neuron_activations_cache_dict[neuron_name].append(ablated_cache[tl_utils.get_act_name("post", neuron_layer)][..., position, neuron_index].cpu().numpy())
 
             if cache_pre_activations: 
-                post_ablation_neuron_pre_activations_cache_dict[neuron_name].append(ablated_cache[utils.get_act_name("pre", neuron_layer)][..., position, neuron_index].cpu().numpy())
+                post_ablation_neuron_pre_activations_cache_dict[neuron_name].append(ablated_cache[tl_utils.get_act_name("pre", neuron_layer)][..., position, neuron_index].cpu().numpy())
 
         ablated_entropy = get_entropy(ablated_logits[:,position,:].unsqueeze(1), use_log2=False).cpu().numpy()
         post_ablation_entropy.append(ablated_entropy)
@@ -734,8 +734,7 @@ def load_model_from_tl_name(model_name, device='cuda', cache_dir=None, hf_token=
     else: 
         model = HookedTransformer.from_pretrained(model_name, device=device, cache_dir=cache_dir, token=hf_token)
 
-
-    return model, tokenizer 
+    return model, tokenizer
 
 
 # Induction functions
@@ -754,27 +753,25 @@ def generate_induction_examples(model, tokenizer, seq_length=100, num_examples=5
         filtered = tok_dataset.filter(lambda example: len(example['tokens']) >= max_len)
         filtered = filtered.shuffle(seed=seed)
         filtered.set_format(type="torch", columns=['tokens'])
-        a = filtered['tokens'][:num_examples, :seq_length].to(device)
+        sequences = filtered['tokens'][:num_examples, :seq_length].to(device)
     else:
-        a = torch.randint(0, model.cfg.d_vocab, size=(num_examples, seq_length), generator=torch_seed, device=device)
+        sequences = torch.randint(0, model.cfg.d_vocab, size=(num_examples, seq_length), generator=torch_seed, device=device)
     
     #wont work for models without single token bos
     if tokenizer.bos_token_id is not None:
         bos_prefix = torch.tensor([tokenizer.bos_token_id]*num_examples, device=device).unsqueeze(1)
-        first_sequence = [bos_prefix, a]
+        first_sequence = [bos_prefix, sequences]
     else: 
-        first_sequence = [a]
+        first_sequence = [sequences]
 
     if use_separator:
         separator = einops.repeat(model.to_tokens(use_separator, prepend_bos=False), "1 seq -> num_ex seq", num_ex=num_examples)
-        things_to_repeat = [separator, a]
-        # tokens = torch.concat([bos_prefix, a, separator, a], dim=-1)  
+        things_to_repeat = [separator, sequences]
     else:
-        things_to_repeat = [a]
-        # tokens = torch.concat([bos_prefix, a, a], dim=-1)  
+        things_to_repeat = [sequences]
     
     things_to_concat = first_sequence + (things_to_repeat*num_repetitions)
-    tokens = torch.concat(things_to_concat, dim=-1)  
+    tokens = torch.concat(things_to_concat, dim=-1)
 
     return tokens
 
@@ -857,13 +854,13 @@ def generate_unigram_df(data, model, tokenizer, model_name, save_file=False, sav
             print("Saving unigram df to: ", save_path)
             pickle.dump(df, f)
 
-    return df 
+    return df
 
-def load_unigram_df(filepath): 
-    with open(filepath, "rb") as f: 
+def load_unigram_df(filepath):
+    with open(filepath, "rb") as f:
         df = pickle.load(f)
 
-    # shoul already be saved in correct order, but just in case
+    # should already be saved in correct order, but just in case
     df = df.sort_values("token_id", ascending=True)
     return df
 
@@ -871,8 +868,8 @@ def load_unigram_df(filepath):
 def get_unigram_distrib(unigram_df, device="cuda"): 
     unigram_distrib = unigram_df['count'].values + 1
 
-    if unigram_distrib.min() == 0: 
-        unigram_distrib += 1     
+    if unigram_distrib.min() == 0:
+        unigram_distrib += 1
 
     unigram_distrib = unigram_distrib / unigram_distrib.sum()
     unigram_distrib = torch.tensor(unigram_distrib, dtype=torch.float32).to(device)
@@ -899,7 +896,7 @@ def n_gram_counter(tensor, n=2):
     if isinstance(tensor, torch.Tensor): 
         items = tensor.tolist()
     else:
-        items = tensor 
+        items = tensor
     # Generate n-grams
     n_grams = [tuple(items[i:i+n]) for i in range(len(items)-n+1)]
     
@@ -926,13 +923,13 @@ def add_induction_info(example, n=4, banned_tokens=set()):
         return example
     else: 
         example['is_valid'] = True
-        # # now we need to choose which repeated n-gram we treat as our induction prefix
-        # # we could choose either via the prefix that appears first or the one that is most commonly repeated in the sequence, or just randomly
+        # now we need to choose which repeated n-gram we treat as our induction prefix
+        # we could choose either via the prefix that appears first or the one that is most commonly repeated in the sequence, or just randomly
 
-        # # i've gone with the one that appears first
+        # we select the one that appears first
         n_grams_with_pos = get_n_grams_with_pos_dict(example['tokens'], n)
         for pos, ngram in n_grams_with_pos.items():
-            if ngram in filtered_ngrams: #first occurence of an ngram that appears in fitlered ngrams
+            if ngram in filtered_ngrams: #first occurence of an ngram that appears in filtered ngrams
                 induction_ngram = ngram
                 induction_ngram_first_pos = pos
                 break
@@ -959,7 +956,7 @@ def get_n_grams_with_pos_dict(tensor, n=2):
     if isinstance(tensor, torch.Tensor): 
         items = tensor.tolist()
     else:
-        items = tensor 
+        items = tensor
     
     n_grams_with_pos = {i:tuple(items[i:i+n]) for i in range(len(items)-n+1)}
     return n_grams_with_pos
@@ -969,7 +966,7 @@ def get_banned_tokens_for_induction(model, tokenizer):
     unknown_token_list = [i for i in range(model.cfg.d_vocab) if '�' in model.to_single_str_token(i)] # this covers cases like 447 and 227 which are jointly tokenised as an apostrophe in gpt2-small
     bos_token_list = [tokenizer.bos_token_id] # this may cause issues for models without bos token
 
-    if 'Llama-2' in model.cfg.model_name: 
+    if 'Llama-2' in model.cfg.model_name:
         other_tokens = [13, 29871] 
 
     else: 
@@ -979,10 +976,10 @@ def get_banned_tokens_for_induction(model, tokenizer):
 
 
 def get_natural_induction_data(tokenized_data, tokenizer, induction_prefix_length=4, max_induction_ngram_count=2, min_distance_between_induction_ngrams=1, banned_tokens=set()):
-    # takes in a hf dataset with column 'tokens' of format torch. 
+    # takes in a hf dataset with column 'tokens' of format torch
     # returns a filtered dataset with extra info about induction
 
-    # remove samples where eos token is in the middle of the text   
+    # remove samples where eos token is in the middle of the text
     filtered_data = tokenized_data.filter(lambda example: len(example['tokens'][example['tokens']==tokenizer.bos_token_id]) < 2)
 
     # add info about induction (used to filter out non-induction samples)
@@ -1001,10 +998,6 @@ def get_natural_induction_data(tokenized_data, tokenizer, induction_prefix_lengt
 
     filtered_data.set_format(type="torch", columns=["tokens"])
 
-    #TODO: other edge cases: second pos should not be the final ngram in the sequence
-    # add column which tells us if token after induction prefix is same as token after second induction prefix
-
-
     return filtered_data
 
 
@@ -1022,7 +1015,7 @@ def get_potential_entropy_neurons_udark(model, select_mode="top_n", percentage_t
     df['component_name'] = df['neuron_index'].apply(lambda x: f"{model.cfg.n_layers - 1}.{x}")
 
     top_percentage = int(percentage_threshold * model.cfg.d_mlp)
-    # sort by fractiono f norm in null space
+    # sort by fraction of norm in null space
     sorted_df = df.sort_values('norm_fraction_on_U_entropy', ascending=False)
 
     if select_mode == "top_n":
@@ -1033,7 +1026,6 @@ def get_potential_entropy_neurons_udark(model, select_mode="top_n", percentage_t
     if plot_graph:
         fig = px.scatter(df, x='norm', y='norm_fraction_on_U_entropy', title=f'Entropy neurons, {len(top_percent_neuron_names)}', hover_name="component_name")
 
-
         min_thresold_value = df[df['component_name'] == top_percent_neuron_names[-1]]['norm_fraction_on_U_entropy'].item()
         fig.add_hline(y=min_thresold_value, line_dash="dash", line_color="black", line_width=1)
 
@@ -1041,78 +1033,23 @@ def get_potential_entropy_neurons_udark(model, select_mode="top_n", percentage_t
     return top_percent_neuron_names
 
 
-def plot_neuron_ablation_results(df, neuron_selection, ablation_type, filter_mode=None, induction_prefix_length=None, neuron_mean_activation=None, 
-preserve_activations_above_or_below_mean=None, memorization_prefix_length=None, skip_kl_from_xl=False):
-    '''
-    ablation type is only used for the title
 
-    filtering is str -> either "natural_induction", "memorization" or None
-
-    induction_prefix_length, neuron_mean_activation, cl
-    '''
-    neuron_df = df[df['component_name'] == neuron_selection]
-
-    #filtering
-    if filter_mode == "natural_induction":
-        neuron_df = neuron_df[(neuron_df["distance_from_b2"] >=-induction_prefix_length ) & (neuron_df["distance_from_b2"] <= 0)]
-    elif filter_mode == "memorization": 
-        neuron_df = neuron_df[neuron_df["pos"] >= memorization_prefix_length]
-
-    if preserve_activations_above_or_below_mean is not None: 
-        if preserve_activations_above_or_below_mean == "above": 
-            neuron_df = neuron_df[neuron_df[f"{neuron_selection}_activation"] > neuron_mean_activation]
-        elif preserve_activations_above_or_below_mean == "below":
-            neuron_df = neuron_df[neuron_df[f"{neuron_selection}_activation"] < neuron_mean_activation]
-        else:
-            print("Invalid preserve_activations_above_or_below_mean argument. Must be 'above' or 'below'")
-
-    # loss vs entropy 
-    fig = px.scatter(neuron_df, x="loss", y="entropy", color="1/rank_of_correct_token", hover_data=["context"])
-    fig.show()
-
-    # activation v delta loss
-    fig = px.scatter(neuron_df, x=f"{neuron_selection}_activation", y="delta_loss_post_ablation", title=f"Change in loss when ablating {neuron_selection}. <br> Ablation type: {ablation_type}", marginal_y="histogram", hover_data=["context", "unique_token"], color="1/rank_of_correct_token")
-    fig.show()
-
-    # activation v delta entropy
-    fig = px.scatter(neuron_df, x=f"{neuron_selection}_activation", y="delta_entropy", title=f"Change in entropy when ablating {neuron_selection}. <br> Ablation type: {ablation_type}", marginal_y="histogram", hover_data=["context", "unique_token"], color="1/rank_of_correct_token")
-    fig.show()
-
-    if not skip_kl_from_xl:
-        # activation v delta kl from xl
-        fig = px.scatter(neuron_df, x=f"{neuron_selection}_activation", y="delta_kl_from_xl", title=f"Change in kl from xl when ablating {neuron_selection}. <br> Ablation type: {ablation_type}", marginal_y="histogram", hover_data=["context", "unique_token"], color="1/rank_of_correct_token")
-        fig.show()
-
-        # delta loss v delta kl from xl
-        fig = px.scatter(neuron_df, x="delta_loss_post_ablation", y="delta_kl_from_xl", title=f"Delta loss vs kl from xl when ablating {neuron_selection}. <br> Ablation type: {ablation_type}", hover_data=["context", "unique_token"], color=f"{neuron_selection}_activation")
-        fig.show()
-
-    # loss v delta loss
-    fig = px.scatter(neuron_df, x="loss", y="delta_loss_post_ablation", color="1/rank_of_correct_token", hover_data=["context"])
-    fig.show()
-
-
-# I've moved this over from induction_mech_interp, so should be ok to delete original functions
 def induction_attn_detector(cache: ActivationCache, threshold=0.7, model=None) -> List[str]:
     '''
     Returns a df of induction scores 
 
     Remember - the tokens used to generate rep_cache are (bos_token, *rand_tokens, *rand_tokens)
     '''
-    # SOLUTION
     induction_heads = []
     attn_heads_labels = []
     induction_scores = []
     for layer in range(model.cfg.n_layers):
         for head in range(model.cfg.n_heads):
-
             if cache.has_batch_dim: 
                 attention_pattern = cache["pattern", layer][:, head]
                 attention_pattern = attention_pattern.mean(dim=0)
             else: 
                 attention_pattern = cache["pattern", layer][head]
-
-                
 
             # take avg of (-seq_len+1)-offset elements
             seq_len = (attention_pattern.shape[-1] - 1) // 2

@@ -1,32 +1,19 @@
 # %% 
-import os
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"  
-os.environ["CUDA_VISIBLE_DEVICES"]="0"
 import sys
 sys.path.append('../')
-from transformer_lens import HookedTransformer
-from sklearn.linear_model import LinearRegression
-import argparse
-import json
-from scipy.stats import ttest_rel, ttest_ind
-from neel.imports import *
-from neel_plotly import * 
-import neel 
 import tqdm
-import math 
+import re
+import random
 from datasets import Dataset
-import pathlib
-import json
 import pandas as pd
-import plotly.express as px
 from functools import partial
-from utils import *
-import math
-from scipy.stats import spearmanr
-import rbo
+from datasets import load_dataset
+from utils import load_model_from_tl_name, get_potential_entropy_neurons_udark, get_entropy_activation_df, get_entropy
 import plotly.graph_objects as go
-import plotly
-from plotly.express.colors import qualitative
+import torch
+import numpy as np
+import transformer_lens.utils as tl_utils
+import neel.utils as nutils
 
 # %%
 SEED = 42
@@ -40,34 +27,21 @@ transformers_cache_dir = None
 #check if cuda is available
 if torch.cuda.is_available():
     device = 'cuda'
-    
 else:
     device = 'mps'
 
 
 # %%
 model_name = "gpt2-small"
-# model_name = "Llama-2-7B"
-
-print_summary_info = False
-use_log2_entropy = False 
-
-entropy_type = 'base e'
-if use_log2_entropy:
-    entropy_type = 'base 2'
-
-# %%
 model, tokenizer = load_model_from_tl_name(model_name, device, transformers_cache_dir)
 model = model.to(device)
 
 # %%
-#data = load_dataset("stas/openwebtext-10k", split='train')
 data = load_dataset("stas/c4-en-10k", split='train')
 first_1k = data.select([i for i in range(0, 2000)])
 
 
-tokenized_data = utils.tokenize_and_concatenate(first_1k, tokenizer, max_length=256, column_name='text')
-
+tokenized_data = tl_utils.tokenize_and_concatenate(first_1k, tokenizer, max_length=256, column_name='text')
 tokenized_data = tokenized_data.shuffle(SEED)
 token_df = nutils.make_token_df(tokenized_data['tokens'])
 
@@ -114,9 +88,7 @@ for i in range(n_of_baselines):
     random_baseline = [f"{entropy_neuron_layer}.{i}" for i in random_baseline]
     random_baselines.append(random_baseline)
 
-# %%
-
-unigram_distrib = None
+unigram_distrib = None #used if we want to compute the KL divergence between the ablated distribution and the distribution from the unigram direction
 # %%
 # check if random_baseline is a defined variable
 components_to_track = entropy_neurons + random_neurons
@@ -145,7 +117,7 @@ entropy_df, resid_dict = get_entropy_activation_df(entropy_neurons + [f'{entropy
 # %%
 # average neuron activations across sequences
 neuron_activations_cache_dict = {}
-for neuron_name in entropy_neurons +random_neurons:
+for neuron_name in entropy_neurons+random_neurons:
     neuron_activations_cache_dict[neuron_name] = entropy_df[[f'{neuron_name}_activation']].values.reshape((num_seq, -1)).mean(axis=0)
 
 # average entropy across sequences
@@ -246,14 +218,11 @@ for neuron_name, mean_value in mean_values_on_random_text.items():
 # =============================================================================
 
 def neurons_clipped_ablation_hook(value, hook, neuron_indices, ablation_values):
-    # todo update this for neruons that "deactivate" on induction
     for neuron_idx, ablation_value in zip(neuron_indices, ablation_values):
         value[0, :, neuron_idx] = torch.min(value[0, :, neuron_idx], ablation_value)
-
     return value
 
 def strict_neurons_clipped_ablation_hook(value, hook, neuron_indices, ablation_values):
-
     if len(neuron_indices) == 1:
         ablation_value = ablation_values[0]
         neuron_index = neuron_indices[0]
@@ -345,7 +314,7 @@ def clip_ablate_neurons(list_of_components_to_ablate=None,
 
             ln_scales  = torch.tensor(rows[f'ln_final_scale'].values)
     
-            hooks = [(utils.get_act_name("post", neuron_layer), partial(strict_neurons_clipped_ablation_hook, neuron_indices=neuron_indices, ablation_values=ablation_values.to(device)))]
+            hooks = [(tl_utils.get_act_name("post", neuron_layer), partial(strict_neurons_clipped_ablation_hook, neuron_indices=neuron_indices, ablation_values=ablation_values.to(device)))]
 
             model.reset_hooks()
 
@@ -435,33 +404,10 @@ induction_multiple_ablation_df['1/rank_of_correct_token'] = induction_multiple_a
 
 # get mean values for each entropy neuron
 mean_values_on_random_text = {neuron_name : entropy_df[entropy_df.pos < entropy_df.pos.max() / 2][f'{neuron_name}_activation'].mean() for neuron_name in entropy_neurons}
-
 print(mean_values_on_random_text)
 
 # %%
-#simpler avg loss diff
-neuron_selection = '11.3030'
-neuron_df = induction_multiple_ablation_df[induction_multiple_ablation_df.component_name == neuron_selection]
-
-neuron_df = neuron_df[neuron_df[f'{neuron_selection}_activation'] > mean_values_on_random_text[neuron_selection]]
-
-neuron_df = neuron_df[columns_to_aggregate].groupby(['pos', 'component_name']).mean().reset_index()
-
-
-px.line(neuron_df, x="pos", y="loss_post_ablation/loss", title=f"Change in loss when ablating {neuron_selection}. <br> Ablation type: {ablation_type}")
-# %%
-neuron_selection = '23.1332'
-neuron_df = induction_multiple_ablation_df[induction_multiple_ablation_df.component_name == neuron_selection]
-neuron_df = neuron_df[neuron_df["pos"]>100]
-px.scatter(neuron_df, x="pos", y="loss_post_ablation/loss", title=f"Change in loss when ablating {neuron_selection}. <br> Ablation type: {ablation_type}", color="1/rank_of_correct_token", color_continuous_scale=plotly.colors.diverging.Picnic,)
-# %%
-px.scatter(neuron_df, x=f"{neuron_selection}_activation", y="loss_post_ablation/loss", title=f"Change in loss when ablating {neuron_selection}. <br> Ablation type: {ablation_type}", color="1/rank_of_correct_token", color_continuous_scale=plotly.colors.diverging.Picnic)
-# %%
-px.scatter(neuron_df, x=f"{neuron_selection}_activation", y="delta_loss_post_ablation", title=f"Change in loss when ablating {neuron_selection}. <br> Ablation type: {ablation_type}", color="1/rank_of_correct_token", color_continuous_scale=plotly.colors.diverging.Picnic)
-
-
-# %%
-# plot the average loss difference for each neuron for each position as line plots, one line per neuron
+# plot the change in loss when ablating entropy neurons simultaneously
 fig = go.Figure()
 
 neuron_selection = '-'.join(selected_neurons)
@@ -503,145 +449,7 @@ fig.update_yaxes(title_text='loss_post_ablation/loss')
 fig.update_xaxes(title_text='position in the sequence')
 fig.add_vline(x=99, line_dash="dash", line_color="black", annotation_text="end of first occurrence of sequence")
 fig.show()
-# %%
-fig = go.Figure()
-for i, neuron_list in enumerate(components_to_ablate):
-    neuron_selection = '-'.join(neuron_list)
 
-    if neuron_list == entropy_neurons:
-        label = 'entropy'
-    elif len(neuron_list) == 1 and neuron_list[0] in entropy_neurons:
-        label = neuron_list[0]
-    else:
-        label = f'random {i}'
-
-    neuron_df = agg_results[agg_results.component_name == neuron_selection]
-    neuron_df_std = agg_results_std[agg_results_std.component_name == neuron_selection]
-    fig.add_trace(go.Scatter(x=neuron_df.pos, y=neuron_df['loss_post_ablation/loss'], mode='lines', name=label))
-
-    #fig.add_trace(go.Scatter(x=neuron_df.pos, y=neuron_df['loss_post_ablation/loss'], mode='lines', name=f'{neuron_name}'))
-
-    # Add upper bound line (mean + std)
-    '''fig.add_trace(go.Scatter(
-        x=neuron_df.pos,
-        y=neuron_df['delta_loss_post_ablation'] + neuron_df_std['delta_loss_post_ablation'],
-        mode='lines',
-        line=dict(width=0),
-        showlegend=False
-    ))
-
-    # Add lower bound line (mean - std)
-    fig.add_trace(go.Scatter(
-        x=neuron_df.pos,
-        y=neuron_df['delta_loss_post_ablation'] - neuron_df_std['delta_loss_post_ablation'],
-        mode='lines',
-        line=dict(width=0),
-        fill='tonexty',
-        fillcolor='rgba(0,0,255,0.2)',  # Change this to the color you want
-        showlegend=False
-    ))'''
-
-# add title
-fig.update_layout(title=f"Change in loss when ablating neurons simultaneously. Ablation type: {ablation_type}")
-# add label to y axis
-fig.update_yaxes(title_text='delta_loss_post_ablation')
-# add label to x axis
-fig.update_xaxes(title_text='position in the sequence')
-fig.add_vline(x=99, line_dash="dash", line_color="black", annotation_text="end of first occurrence of sequence")
-fig.show()
-
-
-# %%
-fig = go.Figure()
-for i, neuron_list in enumerate(components_to_ablate):
-    neuron_selection = '-'.join(neuron_list)
-
-    if neuron_list == entropy_neurons:
-        label = 'entropy'
-    elif len(neuron_list) == 1 and neuron_list[0] in entropy_neurons:
-        label = neuron_list[0]
-    else:
-        label = f'random {i}'
-
-    neuron_df = agg_results[agg_results.component_name == neuron_selection]
-    fig.add_trace(go.Scatter(x=neuron_df.pos, y=neuron_df['loss_post_ablation/loss'], mode='lines', name=label))
-
-# add title
-fig.update_layout(title=f"Change in loss when ablating neurons simultaneously. Ablation type: {ablation_type}")
-# add label to y axis
-fig.update_yaxes(title_text='loss_post_ablation/loss')
-# add label to x axis
-fig.update_xaxes(title_text='position in the sequence')
-fig.add_vline(x=99, line_dash="dash", line_color="black", annotation_text="end of first occurrence of sequence")
-fig.show()
-
-
-# %%
-fig = go.Figure()
-# plot both the loss and the loss_post_ablation 
-neuron_df = agg_results[agg_results.component_name == '-'.join(components_to_ablate)]
-fig.add_trace(go.Scatter(x=neuron_df.pos, y=neuron_df['loss'], mode='lines', name=f'loss'))
-fig.add_trace(go.Scatter(x=neuron_df.pos, y=neuron_df['loss_post_ablation'], mode='lines', name=f'loss_post_ablation'))
-
-# add title
-fig.update_layout(title=f"Change in loss when ablating {components_to_ablate} simultaneously. Ablation type: {ablation_type}")
-# add label to y axis
-fig.update_yaxes(title_text='delta_loss_post_ablation')
-# add label to x axis
-fig.update_xaxes(title_text='position in the sequence')
-fig.add_vline(x=99, line_dash="dash", line_color="black", annotation_text="end of first occurrence of sequence")
-fig.show()
-
-# %%
-# neuron_selection = '31.7335'
-neuron_selection = '23.1332'
-induction_multiple_ablation_df_f = induction_multiple_ablation_df[induction_multiple_ablation_df.component_name == neuron_selection]
-for neuron_name, mean_value in zip(entropy_neurons, mean_values_on_random_text):
-    induction_multiple_ablation_df_f = induction_multiple_ablation_df_f[induction_multiple_ablation_df_f[f'{neuron_name}_activation'] > mean_value]
-induction_multiple_ablation_df_f = induction_multiple_ablation_df_f[induction_multiple_ablation_df_f.pos > 100]
-#induction_multiple_ablation_df_f = induction_multiple_ablation_df_f[induction_multiple_ablation_df_f['rank_of_correct_token'] == 0]
-
-print(len(induction_multiple_ablation_df_f))
-print(len(induction_multiple_ablation_df_f)/len(induction_multiple_ablation_df) * len(components_to_ablate))
-
-induction_multiple_ablation_df_f['1/rank_of_correct_token'] = induction_multiple_ablation_df_f['rank_of_correct_token'].apply(lambda x: 1/(x+1))
-fig = px.scatter(induction_multiple_ablation_df_f, x='loss', y='delta_loss_post_ablation', color='pos', hover_data=['str_tokens', 'loss'], opacity=1, color_continuous_scale=plotly.colors.diverging.Picnic, title=f'Change in loss upon ablation of {"-".join(entropy_neurons)} on induction. Ablation type: {ablation_type}', marginal_x='histogram', marginal_y='histogram')
-# make it log scale
-fig.show()
-# %%
-induction_multiple_ablation_df_f = induction_multiple_ablation_df[induction_multiple_ablation_df.component_name == '-'.join(entropy_neurons)]
-for neuron_name, mean_value in zip(entropy_neurons, mean_values_on_random_text):
-    induction_multiple_ablation_df_f = induction_multiple_ablation_df_f[induction_multiple_ablation_df_f[f'{neuron_name}_activation'] > mean_value]
-induction_multiple_ablation_df_f = induction_multiple_ablation_df_f[induction_multiple_ablation_df_f.pos > 100]
-#induction_multiple_ablation_df_f = induction_multiple_ablation_df_f[induction_multiple_ablation_df_f['rank_of_correct_token'] == 0]
-# make histogram of the delta loss, make it density
-fig = px.histogram(induction_multiple_ablation_df_f, x='delta_loss_post_ablation', marginal='box', title=f'Change in loss upon ablation of {"-".join(entropy_neurons)} on induction. Ablation type: {ablation_type}')
-fig.show()
-# %%
-# check wheter delta_loss_post_ablation is significantly different from 0
-print(ttest_rel(induction_multiple_ablation_df_f['delta_loss_post_ablation'], np.zeros(len(induction_multiple_ablation_df_f))))
-print(induction_multiple_ablation_df_f['delta_loss_post_ablation'].mean())
-
-# %%
-induction_multiple_ablation_df_f = induction_multiple_ablation_df[induction_multiple_ablation_df.component_name == '-'.join(entropy_neurons)]
-for neuron_name, mean_value in zip(entropy_neurons, mean_values_on_random_text):
-    induction_multiple_ablation_df_f = induction_multiple_ablation_df_f[induction_multiple_ablation_df_f[f'{neuron_name}_activation'] > mean_value]
-induction_multiple_ablation_df_f = induction_multiple_ablation_df_f[induction_multiple_ablation_df_f.pos > 100]
-induction_multiple_ablation_df_f = induction_multiple_ablation_df_f[induction_multiple_ablation_df_f['rank_of_correct_token'] > 0]
-# make histogram of the delta loss, make it density
-fig = px.histogram(induction_multiple_ablation_df_f, x='delta_loss_post_ablation', marginal='box', title=f'Change in loss upon ablation of {"-".join(entropy_neurons)} on induction. Ablation type: {ablation_type}')
-fig.show()
-# %%
-# check wheter delta_loss_post_ablation is significantly different from 0
-print(ttest_rel(induction_multiple_ablation_df_f['delta_loss_post_ablation'], np.zeros(len(induction_multiple_ablation_df_f))))
-print(induction_multiple_ablation_df_f['delta_loss_post_ablation'].mean())
-
-
-# %%
-induction_multiple_ablation_df['1/rank_of_correct_token'] = induction_multiple_ablation_df['rank_of_correct_token'].apply(lambda x: 1/(x+1))
-fig = px.scatter(induction_multiple_ablation_df, x=f'loss', y='loss_post_ablation/loss', color='1/rank_of_correct_token', hover_data=['str_tokens', 'loss'], opacity=1, color_continuous_scale=plotly.colors.diverging.Picnic, title=f'Change in loss upon ablation of {"-".join(components_to_ablate)} on induction. Ablation type: {ablation_type}', marginal_x='histogram', marginal_y='histogram')
-# make it log scale
-fig.show()
 
 # %%
 # =============================================================================
@@ -667,7 +475,7 @@ components_to_ablate = [[component] for component in components_to_ablate]
 
 # %%
 model.set_use_attn_result(False)
-k = 1000
+k = 50
 ablation_type = 'mean'
 induction_ablation_df = clip_ablate_neurons(list_of_components_to_ablate=components_to_ablate,
                                 tokenized_data=induction_tokenized_data,
@@ -701,9 +509,9 @@ print(mean_values_on_random_text)
 # %%
 
 metric = 'entropy_post_ablation/entropy'
-#metric = 'loss_post_ablation/loss'
+# metric = 'loss_post_ablation/loss'
 
-# plot the average loss difference for each neuron for each position as line plots, one line per neuron
+# plot the average relative entropy (or loss) difference for each neuron for each position as line plots, one line per neuron
 fig = go.Figure()
 correct_token_df = induction_ablation_df[induction_ablation_df['rank_of_correct_token'] > -1]
 correct_token_df = correct_token_df[columns_to_aggregate].groupby(['pos', 'component_name']).mean().reset_index()
@@ -719,180 +527,3 @@ fig.update_yaxes(title_text=metric)
 fig.update_xaxes(title_text='position in the sequence')
 fig.add_vline(x=99, line_dash="dash", line_color="black", annotation_text="end of first occurrence of sequence")
 fig.show()
-# %%
-# =============================================================================
-# Plot for paper: relative change in entropy
-# =============================================================================
-metric = 'entropy_post_ablation/entropy'
-#metric = 'loss_post_ablation/loss'
-
-# plot the average loss difference for each neuron for each position as line plots, one line per neuron
-fig = go.Figure()
-correct_token_df = induction_ablation_df[induction_ablation_df['rank_of_correct_token'] > -1]
-correct_token_df = correct_token_df[columns_to_aggregate].groupby(['pos', 'component_name']).mean().reset_index()
-color_dict = {'potential_entropy_neurons': 'blue', 'random_neurons': 'red'}
-i = 2
-first_baseline = True
-for neuron_name in potential_entropy_neurons + random_neurons:
-    neuron_df = correct_token_df[correct_token_df.component_name == neuron_name]
-    if neuron_name in potential_entropy_neurons:
-        fig.add_trace(go.Scatter(x=neuron_df.pos, y=neuron_df[metric], mode='lines', name=f'{neuron_name}', line=dict(color=qualitative.Plotly[i], dash='dot', width=2.5)))
-        i += 1
-    else:
-        fig.add_trace(go.Scatter(x=neuron_df.pos, y=neuron_df[metric], mode='lines', name='Baselines', line=dict(color=qualitative.Plotly[0]), showlegend=first_baseline))
-        first_baseline = False
-
-    #fig.add_trace(go.Scatter(x=neuron_df.pos, y=neuron_df[metric], mode='lines', name=f'{neuron_name}'))
-
-fig.add_vline(x=99, line_dash="dash", line_color="black", annotation_text="start of induct.")
-
-# add title
-fig.update_layout(title=f"(b) Change in Entropy Upon Ablation")
-# set axis labels
-fig.update_xaxes(title_text='Position in Sequence')
-# add label to y axis
-fig.update_yaxes(title_text='Entropy Post Ablation / Entropy')
-
-# remove padding
-fig.update_layout(margin=dict(l=0, r=3, t=30, b=0))
-
-# decrease the width of the plot
-rescaling_factor = 1.0
-fig.update_layout(width=350*rescaling_factor, height=275/rescaling_factor)
-
-# decrease title font size
-fig.update_layout(title_font_size=16)
-
-# save the plot as a pdf
-#fig.write_image('../img/induction_entropy_change.pdf')
-
-fig.show()
-
-
-# %%
-neuron = '11.2378'
-# plot loss_post_ablation_with_frozen_ln/loss and loss_post_ablation/loss for neuron 23.1332
-fig = go.Figure()
-correct_token_df = induction_ablation_df[induction_ablation_df['rank_of_correct_token'] == 0]
-correct_token_df = correct_token_df[columns_to_aggregate].groupby(['pos', 'component_name']).mean().reset_index()
-neuron_df = correct_token_df[correct_token_df.component_name == neuron]
-#neuron_df = agg_results[agg_results.component_name == neuron]
-fig.add_trace(go.Scatter(x=neuron_df.pos, y=neuron_df['loss_post_ablation_with_frozen_ln/loss'], mode='lines', name=f'loss_post_ablation_with_frozen_ln/loss'))
-fig.add_trace(go.Scatter(x=neuron_df.pos, y=neuron_df['loss_post_ablation/loss'], mode='lines', name=f'loss_post_ablation/loss'))
-fig.add_trace(go.Scatter(x=neuron_df.pos, y=neuron_df['delta_loss_post_ablation'], mode='lines', name=f'delta_loss_post_ablation'))
-fig.add_trace(go.Scatter(x=neuron_df.pos, y=neuron_df['delta_loss_post_ablation_with_frozen_ln'], mode='lines', name=f'delta_loss_post_ablation_with_frozen_ln'))
-fig.add_trace(go.Scatter(x=neuron_df.pos, y=neuron_df['delta_entropy'], mode='lines', name=f'delta_entropy'))
-fig.add_trace(go.Scatter(x=neuron_df.pos, y=neuron_df['delta_entropy_with_frozen_ln'], mode='lines', name=f'delta_entropy_with_frozen_ln'))
-# add title
-fig.update_layout(title=f"Ablation of {neuron} in {model_name}. Ablation type: clipped {ablation_type}")
-
-
-
-# %%
-# plot the average loss difference for each neuron for each position as line plots, one line per neuron
-fig = go.Figure()
-correct_token_df = induction_ablation_df[induction_ablation_df['rank_of_correct_token'] > -1]
-correct_token_df = correct_token_df[columns_to_aggregate].groupby(['pos', 'component_name']).mean().reset_index()
-for neuron_name in potential_entropy_neurons + random_neurons:
-    neuron_df = correct_token_df[agg_results.component_name == neuron_name]
-    fig.add_trace(go.Scatter(x=neuron_df.pos, y=neuron_df['delta_loss_post_ablation'], mode='lines', name=f'{neuron_name}'))
-
-# add title
-fig.update_layout(title=f"Change in loss upon ablation on correct tokens")
-# add label to y axis
-fig.update_yaxes(title_text='delta_loss_post_ablation')
-# add label to x axis
-fig.update_xaxes(title_text='position in the sequence')
-fig.add_vline(x=99, line_dash="dash", line_color="black", annotation_text="end of first occurrence of sequence")
-fig.show()
-
-# %%
-induction_ablation_df['1/rank_of_correct_token'] = induction_ablation_df['rank_of_correct_token'].apply(lambda x: 1/(x+1))
-# filter out the rows in for which 1/rank_of_correct_token is < 1
-#induction_ablation_df_f = induction_ablation_df[induction_ablation_df['1/rank_of_correct_token'] >=1]
-induction_ablation_df_f = induction_ablation_df[induction_ablation_df.pos > 101]
-#induction_ablation_df_f = induction_ablation_df_f[induction_ablation_df_f['31.7335_activation'] >0 ]
-neuron_selection = '11.2378'
-induction_ablation_df_f = induction_ablation_df_f[induction_ablation_df_f[f'{neuron_selection}_activation'] > mean_values_on_random_text[neuron_selection]]
-fig = px.scatter(induction_ablation_df_f[induction_ablation_df_f['component_name'] == neuron_selection], x=f'loss', y='delta_loss_post_ablation', color='1/rank_of_correct_token', hover_data=['str_tokens', 'loss'], opacity=1, color_continuous_scale=plotly.colors.diverging.Picnic, title=f'Change in loss upon ablation of {neuron_selection} on induction.', marginal_y='histogram', ) #range_color=[-0.3, 0.3])
-
-fig.show()
-# %%
-# =============================================================================
-# plots for paper: scatter plot of 2378
-# =============================================================================
-neuron_selection = '11.2378'
-induction_ablation_df['RR'] = induction_ablation_df['rank_of_correct_token'].apply(lambda x: 1/(x+1))
-# filter out the rows in for which 1/rank_of_correct_token is < 1
-#induction_ablation_df_f = induction_ablation_df[induction_ablation_df['1/rank_of_correct_token'] >=1]
-induction_ablation_df_f = induction_ablation_df[induction_ablation_df.pos < 101]
-#induction_ablation_df_f = induction_ablation_df_f[induction_ablation_df_f['31.7335_activation'] >0 ]
-neuron_selection = '11.2378'
-induction_ablation_df_f = induction_ablation_df_f[induction_ablation_df_f[f'{neuron_selection}_activation'] > mean_values_on_random_text[neuron_selection]]
-fig = px.scatter(induction_ablation_df_f[induction_ablation_df_f['component_name'] == neuron_selection], x=f'loss', y='delta_loss_post_ablation', color='RR', hover_data=['str_tokens', 'loss'], opacity=1, color_continuous_scale='Picnic', title=f'Change in loss upon ablation of {neuron_selection} on induction.', labels={'loss': 'Loss', 'delta_loss_post_ablation': 'ΔLoss Post Ablation', 'RR': '1/RC'})
-
-# add title
-fig.update_layout(title=f"(a) 11.2378: Change in Loss Upon Abl.")
-# set axis labels
-#fig.update_xaxes(title_text='Loss')
-# add label to y axis
-#fig.update_yaxes(title_text='Delta Loss Post Ablation')
-
-# remove padding
-fig.update_layout(margin=dict(l=0, r=3, t=30, b=0))
-
-# decrease the width of the plot
-rescaling_factor = 1
-fig.update_layout(width=350*rescaling_factor, height=275/rescaling_factor)
-
-# decrease title font size
-fig.update_layout(title_font_size=16)
-
-# save the plot as a pdf
-fig.write_image('../img/general_loss_change_2378.pdf')
-
-fig.show()
-
-# %% 
-
-# %%
-neuron_selection = '11.2378'
-induction_ablation_df_f = induction_ablation_df[induction_ablation_df.component_name == neuron_selection]
-induction_ablation_df_f = induction_ablation_df_f[induction_ablation_df_f[f'{neuron_selection}_activation'] > mean_values_on_random_text[neuron_selection]]
-induction_ablation_df_f = induction_ablation_df_f[induction_ablation_df_f.pos > 100]
-#induction_ablation_df_f = induction_ablation_df_f[induction_ablation_df_f['rank_of_correct_token'] == 0]
-# make histogram of the delta loss, make it density
-fig = px.histogram(induction_ablation_df_f, x='delta_loss_post_ablation', marginal='box', title=f'Change in loss upon ablation of {neuron_selection} on induction. Ablation type: {ablation_type}')
-fig.show()
-# %%
-# check wheter delta_loss_post_ablation is significantly different from 0
-print(ttest_rel(induction_ablation_df_f['delta_loss_post_ablation'], np.zeros(len(induction_ablation_df_f))))
-print(induction_ablation_df_f['delta_loss_post_ablation'].mean())
-
-# %%
-neuron_selection = '11.2910'
-induction_ablation_df_f = induction_ablation_df[(induction_ablation_df.component_name == neuron_selection) & (induction_ablation_df.pos > 100)]
-fig = px.scatter(induction_ablation_df_f, x=f'{neuron_selection}_activation', y='delta_loss_post_ablation', color='1/rank_of_correct_token', hover_data=['str_tokens', 'loss'], opacity=1, color_continuous_scale=plotly.colors.diverging.Picnic, title=f'Change in loss upon ablation of {neuron_selection} on induction. Ablation type: {ablation_type}', marginal_y='histogram', ) #range_color=[-0.3, 0.3])
-# add vertical line at mean value
-fig.add_vline(x=mean_values_on_random_text[neuron_selection], line_dash="dash", line_color="black", annotation_text="mean value")
-fig.show()
-
-# %%
-# for neuron 11.2748, plot both loss and loss_post_ablation
-fig = go.Figure()
-neuron_name = '11.2910'
-neuron_df = agg_results[agg_results.component_name == neuron_name]
-fig.add_trace(go.Scatter(x=neuron_df.pos, y=neuron_df['loss'], mode='lines', name=f'loss'))
-fig.add_trace(go.Scatter(x=neuron_df.pos, y=neuron_df['loss_post_ablation'], mode='lines', name=f'loss_post_ablation'))
-fig.add_trace(go.Scatter(x=neuron_df.pos, y=neuron_df['delta_loss_post_ablation'], mode='lines', name=f'delta_loss_post_ablation'))
-
-# add title
-fig.update_layout(title=f"Change in loss upon ablation of {neuron_name} on induction. Ablation type: {ablation_type}")
-# add label to y axis
-fig.update_yaxes(title_text='loss')
-# add label to x axis
-fig.update_xaxes(title_text='position in the sequence')
-fig.add_vline(x=99, line_dash="dash", line_color="black", annotation_text="end of first occurrence of sequence")
-fig.show()
-
-# %%

@@ -1,18 +1,16 @@
 # %% 
 import os
-os.environ["CUDA_ARGS_ORDER"]="PCI_BUS_ID"  
-os.environ["CUDA_VISIBLE_ARGS"]="0"
 import sys
 sys.path.append('../')
 import numpy as np
 import torch
 from datasets import load_dataset
+from utils import get_entropy, load_model_from_tl_name, filter_entropy_activation_df, get_entropy_activation_df, get_pile_unigram_distribution
 import neel.utils as nutils
 import transformer_lens.utils as utils
 import tqdm
 import pathlib
 import pandas as pd
-from utils import get_entropy, load_model_from_tl_name, filter_entropy_activation_df, get_entropy_activation_df, get_pile_unigram_distribution
 import hydra
 from omegaconf import DictConfig, OmegaConf
 from torch.nn.functional import kl_div
