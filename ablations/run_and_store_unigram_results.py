@@ -285,6 +285,7 @@ def run_and_store_ablation_results(args: DictConfig):
     final_df = filter_entropy_activation_df(final_df.reset_index(), model_name=args.model, tokenizer=tokenizer, start_pos=3, end_pos=-1)
 
     # store the final_df as a feather file
+    final_df = final_df.reset_index(drop=True)
     final_df.to_feather(f'{save_path}/k{args.k}.feather')
 
 

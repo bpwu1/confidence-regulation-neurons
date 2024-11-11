@@ -11,12 +11,13 @@ import plotly.graph_objects as go
 from plotly.express.colors import qualitative
 from utils import load_model_from_tl_name, get_pile_unigram_distribution
 # %%
-output_dir = './results'
+output_dir = 'results'
 model_name = 'gpt2-small'
 dataset = 'stas/c4-en-10k'
 data_range_start = 0
 data_range_end = 1000
-k = 100
+# k = 100 
+k = 10
 
 save_path = f'./{output_dir}/{model_name}/unigram/{dataset.replace("/","_")}_{data_range_start}-{data_range_end}/k{k}.feather'
 final_df = pd.read_feather(save_path)
@@ -66,7 +67,7 @@ agg_results['1-abs_delta_loss_with_frozen_unigram/abs_delta_loss'] = 1 - agg_res
 # plot for paper
 # =============================================================================
 
-device='mps'
+device='cuda'
 
 model, tokenizer = load_model_from_tl_name(model_name, device)
 model = model.to(device)
@@ -77,7 +78,7 @@ for param in model.parameters():
     param.requires_grad = False
 
 if 'pythia' in model_name:
-        unigram_distrib = get_pile_unigram_distribution(device=device, file_path='../datasets/pythia-unigrams.npy')
+    unigram_distrib = get_pile_unigram_distribution(device=device, file_path='../datasets/pythia-unigrams.npy')
 elif 'gpt' in model_name:
     unigram_distrib = get_pile_unigram_distribution(device=device, file_path='../datasets/gpt2-small-unigrams_openwebtext-2M_rows_500000.npy', pad_to_match_W_U=False)
 else:
@@ -88,7 +89,7 @@ unigram_logits = unigram_distrib.log() - unigram_distrib.log().mean()
 # %%
 cosine_sims_in_vocab = torch.zeros((model.cfg.n_layers, model.cfg.d_mlp))
 for layer_idx in tqdm.tqdm(range(0,model.cfg.n_layers)):
-    neurons = model.W_out[layer_idx, :].to('mps')
+    neurons = model.W_out[layer_idx, :].to(device)
     cosine_sim = (neurons @ model.W_U) @ unigram_logits / ((neurons @ model.W_U).norm(dim=-1) * unigram_logits.norm())
     cosine_sims_in_vocab[layer_idx, :] = cosine_sim
 # %%
@@ -152,19 +153,28 @@ fig.show()
 # =============================================================================
 # plot for paper: box plot of KL from unigram
 # =============================================================================
-output_dir = './results'
+output_dir = 'results'
 model_name = 'pythia-410m'
 dataset = 'stas/c4-en-10k'
 data_range_start = 0
 data_range_end = 1000
-k = 50
+# k = 50
+k = 10
 
 save_path = f'./{output_dir}/{model_name}/unigram/{dataset.replace("/","_")}_{data_range_start}-{data_range_end}/k{k}.feather'
 final_df = pd.read_feather(save_path)
 
 final_df['delta_loss'] = final_df['loss_post_ablation'] - final_df['loss']
 final_df['delta_loss_with_frozen_unigram'] = final_df['loss_post_ablation_with_frozen_unigram'] - final_df['loss']
-final_df['abs_kl_from_unigram_diff'] = final_df['kl_from_unigram_diff'].abs()
+final_df['abs_delta_loss_post_ablation'] = np.abs(final_df['loss_post_ablation'] - final_df['loss'])
+final_df['abs_delta_loss_post_ablation_with_frozen_unigram'] = np.abs(final_df['loss_post_ablation_with_frozen_unigram'] - final_df['loss'])
+final_df['delta_entropy'] = final_df['entropy_post_ablation'] - final_df['entropy']
+
+if 'kl_divergence_before' in final_df.columns:
+    print('kl_divergence_before found')
+    final_df['kl_from_unigram_diff'] = final_df['kl_divergence_after'] - final_df['kl_divergence_before']
+    final_df['kl_from_unigram_diff_with_frozen_unigram'] = final_df['kl_divergence_after_frozen_unigram'] - final_df['kl_divergence_before']
+    final_df['abs_kl_from_unigram_diff'] = final_df['kl_from_unigram_diff'].abs()
 columns_to_aggregate =list(final_df.columns[-17:]) + ['loss']
 agg_results = final_df[columns_to_aggregate].groupby('component_name').mean().reset_index()
 

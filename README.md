@@ -15,7 +15,7 @@ For accessing gated repositories (e.g., LLaMA), add your HuggingFace token to `.
 
 ## Ablation Experiments
 
-The `ablations/` folder contains code for performing neuron ablation experiments to identify entropy and token frequency neurons. We use Hydra for parameter configuration. The config files are available in ablations/config/.
+The `ablations/` folder contains code for performing neuron ablation experiments to identify entropy and token frequency neurons. We use Hydra for parameter configuration. The config files are available in ablations/config/. These scripts should be executed from the `ablations` folder.
 
 
 - `run_and_store_ablation_results.py`: Runs mean ablations to quantify the total vs direct effect for entropy neurons.

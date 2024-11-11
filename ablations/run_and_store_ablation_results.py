@@ -1,12 +1,14 @@
 # %% 
+
+
 import os
+
 import sys
 sys.path.append('../')
 import numpy as np
 import torch
 from datasets import load_dataset
 from utils import get_entropy, load_model_from_tl_name, filter_entropy_activation_df, get_entropy_activation_df
-
 import neel.utils as nutils
 import transformer_lens.utils as utils
 import tqdm
@@ -333,10 +335,10 @@ def run_and_store_ablation_results(args: DictConfig):
     
     # concatenate the results
     final_df = pd.concat(results.values())
-
     final_df = filter_entropy_activation_df(final_df.reset_index(), model_name=args.model, tokenizer=tokenizer, start_pos=3, end_pos=-1)
 
     # store the final_df as a feather file
+    final_df = final_df.reset_index(drop=True)
     final_df.to_feather(f'{save_path}/k{args.k}.feather')
 
 

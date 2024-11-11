@@ -14,7 +14,8 @@ model = 'gpt2-small'
 dataset = 'stas/c4-en-10k'
 data_range_start = 0
 data_range_end = 1000
-k = 50
+# k = 50
+k = 10
 
 save_path = f'./{output_dir}/{model}/ln_scale/{dataset.replace("/","_")}_{data_range_start}-{data_range_end}/k{k}.feather'
 final_df = pd.read_feather(save_path)

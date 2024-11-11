@@ -2,8 +2,8 @@ device: cuda
 dry_run: false
 seed: 42
 
-chdir: ./ablations
-model: gpt2
+chdir: "."
+model: gpt2-small
 dataset: stas/c4-en-10k
 use_log2_entropy: false
 data_range_start: 0
