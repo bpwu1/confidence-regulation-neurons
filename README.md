@@ -9,6 +9,7 @@ This repository contains the code for the NeurIPS 2024 paper “Confidence Regul
 To install the required packages, run:
 
     pip install -r requirements.txt
+    pip install git+https://github.com/neelnanda-io/neel-plotly.git
     pip install git+https://github.com/neelnanda-io/neelutils.git
 
 For accessing gated repositories (e.g., LLaMA), add your HuggingFace token to `./ablations/hf_token.txt`.
